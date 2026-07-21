@@ -70,7 +70,7 @@ All examples denote the same C major/minor triads.
 | `W<n>` | Wechsel (Hook) | `⟨-, -n, n⟩` (= `Sn o P`) |
 | `<s,tp,tm>` | literal UTT | e.g. `<+,2,10>` or `<-,3,9>` |
 
-## UTT Literals
+### UTT Literals
 
 `<s,tp,tm>` — a **Uniform Triadic Transformation** (Hook 2002).
 
@@ -79,6 +79,20 @@ All examples denote the same C major/minor triads.
 - `tm` = transposition applied to a minor triad
 
 **Example:** `<+,2,10>(C,+) -> (D,+)`
+
+## Step-by-step output
+
+    <expr> --steps
+    
+Decompose the expression, showing each operator applied one at a time 
+(like `path:`). The user's sequence is kept; compounds (H, N, S, P', L', R') 
+expand to P/L/R generators.
+
+**Examples:**
+
+    C (LR) --steps
+    (Gm)(H) --steps
+
 
 ## Inspection
 
@@ -116,7 +130,9 @@ Or an explicit token list, e.g. `--ops PLD6`.
     path --ops hyer (C,+) (G,+)
     path (C,+) (E,-) --ops lr
 
-## Output Style
+## Options
+
+### Output Style
 
 | Command | Effect |
 |---------|--------|
@@ -126,7 +142,7 @@ Or an explicit token list, e.g. `--ops PLD6`.
 | `out:spell` | show triad as a spelled-out list of notes (e.g. `[C,E,G]`) |
 | `out` | show current output style |
 
-## Description in Output
+### Description in Output
 
 | Command | Effect |
 |---------|--------|
@@ -134,7 +150,7 @@ Or an explicit token list, e.g. `--ops PLD6`.
 | `desc:off` | omit the full description (default) |
 | `desc` | show current description setting |
 
-## Spelling Commands
+### Spelling Commands
 
 Change how results are written.
 

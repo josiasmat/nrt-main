@@ -53,7 +53,6 @@ C_OP    = '\033[97m'  # magenta
 C_RESET = '\033[0m'
 
 
-
 # --- Parsing helpers ---
 def parse_note(note):
     """Return the pitch class (0-11) of a note name like 'C', 'Eb', 'F#'."""
@@ -558,6 +557,44 @@ def apply_side(state, text):
     return utt(root, mode, *side_to_utt(text))
 
 
+# Canonical decomposition of compound operators into P/L/R generators.
+# Matches UTT_TABLE / _obverse definitions (H=PLP, N=PLR, S=LPR, primes=obverse).
+COMPOUND_EXPANSION = {
+    'H':  ['P', 'L', 'P'],   # hexatonic pole
+    'N':  ['P', 'L', 'R'],   # nebenverwandt
+    'S':  ['L', 'P', 'R'],   # slide
+    "P'": ['R', 'P', 'L'],   # P-prime (obverse)
+    "L'": ['R', 'L', 'P'],   # L-prime
+    "R'": ['L', 'R', 'P'],   # R-prime
+}
+
+
+def _iter_side_tokens(text):
+    """Yield atomic operator tokens of one side in application order.
+
+    Preserves the user's sequence exactly (no shortest-path collapsing).
+    Compound operators (H, N, S, P', L', R') are expanded into their
+    canonical P/L/R generators. Application order respects MODE.
+    """
+    text = text.replace(' ', '')
+    if not text:
+        return
+    groups = re.findall(r'\(([^()]*)\)', text)
+    seq = groups if groups else [text]
+    if MODE == 'rl':
+        seq = list(reversed(seq))
+    for g in seq:
+        toks = expand_group(g)
+        if MODE == 'rl':
+            toks = list(reversed(toks))
+        for t in toks:
+            expanded = COMPOUND_EXPANSION.get(t)
+            if expanded is not None:
+                yield from (reversed(expanded) if MODE == 'rl' else expanded)
+            else:
+                yield t
+
+
 # --- UTT inspection ---
 def format_utt(u):
     """Render a UTT triple as '⟨sigma, t+, t-⟩'."""
@@ -694,16 +731,6 @@ def format_output(root, mode, style):
         chord = _format_input_form(root, mode, style)
 
     return f"{chord} ⇒ {describe(root, mode, sharp)}" if SHOW_DESCR else chord
-
-
-def _pad_root(root, sharp):
-    """Root spelling padded so natural notes align with #/b ones."""
-    text = format_root(root, sharp, True, root_hint=root)
-    # If no accidental char present, append a space to occupy the column.
-    if not (text.endswith('#') or text.endswith('b')
-            or SHARP_SIGN in text or FLAT_SIGN in text):
-        text += ' '
-    return text
 
 
 def _triad_label(root, mode):
@@ -880,6 +907,26 @@ def evaluate(expr):
     return format_output(root, mode, style), mode
 
 
+def format_steps(expr):
+    """Decompose an expression into per-operator steps (like path: output).
+
+    Keeps the operators as given by the user (compounds expanded to atomic
+    generators); does NOT reduce to a shortest path.
+    """
+    prefix, obj, suffix = find_object(expr)
+    root, mode, style = parse_object(obj)
+
+    tokens = list(_iter_side_tokens(prefix)) + list(_iter_side_tokens(suffix))
+    parts = [_triad_label(root, mode)]
+    for tok in tokens:
+        root, mode = utt(root, mode, *token_to_utt(tok))
+        parts.append(f" {_op_label(_pretty_token(tok))} → {_triad_label(root, mode)}")
+
+    n = len(tokens)
+    header = f"{n} step{'s' if n != 1 else ''}:"
+    return f"{header}\n  {''.join(parts)}"
+
+
 def parse_path(text):
     """Parse 'O1 O2' into two (root, mode) states via find_object."""
     prefix, obj1, rest = find_object(text)
@@ -956,6 +1003,12 @@ UTT LITERALS:
                tm = transposition applied to a minor triad
                Example: <+,2,10>(C,+) -> (D,+)
 
+STEP-BY-STEP OUTPUT:
+  <expr> --steps   decompose the expression, showing each operator applied
+                   one at a time (like path:). The user's sequence is kept;
+                   compounds (H, N, S, P', L', R') expand to P/L/R generators.
+                   Example:  C (LR) --steps    (Gm)(H) --steps
+
 INSPECTION:
   inspect:<ops>  normalize a transformation (no object) into a single
                  UTT <s,tp,tm> and show its type, whether it is
@@ -1026,7 +1079,7 @@ def _is_cmd(cmd, line):
 
 def repl(use_color):
     """Interactive read-eval-print loop."""
-    print("Neo-riemannian evaluator.  Ex: [C,E,G](LR)  |  <+,2,10>(C,+)")
+    print("Neo-Riemannian transformations evaluator.")
     print("Type 'help' for instructions.  'quit' or 'exit' to exit.\n")
     global SPELLING, OUTPUT_STYLE, SHOW_DESCR, MODE, USE_COLOR
     USE_COLOR = use_color
@@ -1124,9 +1177,13 @@ def repl(use_color):
             continue
 
         try:
+            m = re.search(r'\s*--(?:steps|decompose|verbose)\b', line)
             text, mode = evaluate(line)
             out = colorize(text, mode) if (use_color and mode is not None) else text
             print(out + "\n")
+            if m:
+                expr = (line[:m.start()] + line[m.end():]).strip()
+                print(format_steps(expr) + "\n")
         except Exception as e:
             print(f"Error: {e}\n")
 
@@ -1165,9 +1222,15 @@ def main():
             start, goal = parse_path(' '.join(filtered))
             print(format_path(start, goal, gens) + "\n")
         else:
-            text, mode = evaluate(' '.join(rest))
-            out = colorize(text, mode) if (use_color and mode is not None) else text
-            print(out + "\n")
+            joined = ' '.join(rest)
+            m = re.search(r'\s*--(?:steps|decompose|verbose)\b', joined)
+            if m:
+                expr = (joined[:m.start()] + joined[m.end():]).strip()
+                print(format_steps(expr) + "\n")
+            else:
+                text, mode = evaluate(joined)
+                out = colorize(text, mode) if (use_color and mode is not None) else text
+                print(out + "\n")
     else:
         repl(use_color)
 
@@ -1303,6 +1366,33 @@ def _run_tests():
     # --- Error paths ---
     check_error("no object",      lambda: evaluate("(LR)(PP)"))
     check_error("bad operator",   lambda: group_to_utt("Z"))
+
+    # --- format_steps (--steps): keep user sequence, expand compounds ---
+    OUTPUT_STYLE = 'tuple'
+    s = format_steps("C(LR)")
+    check("steps C(LR) count",  "2 steps" in s, True)
+    check("steps C(LR) L step", "→ (E,-)" in s, True)
+    check("steps C(LR) final",  s.strip().endswith("(G,+)"), True)
+
+    check("iter H -> PLP",  list(_iter_side_tokens("H")),  ['P', 'L', 'P'])
+    check("iter N -> PLR",  list(_iter_side_tokens("N")),  ['P', 'L', 'R'])
+    check("iter S -> LPR",  list(_iter_side_tokens("S")),  ['L', 'P', 'R'])
+    check("iter P' -> RPL", list(_iter_side_tokens("P'")), ['R', 'P', 'L'])
+    check("steps H is 3",   "3 steps" in format_steps("C(H)"), True)
+
+    # Sequence must NOT collapse: LRLRLR stays 6 steps (not shortest T-form).
+    check("steps no collapse", "6 steps" in format_steps("C(LRLRLR)"), True)
+
+    # Expansion faithful: same final triad as evaluate().
+    for expr in ("C(H)", "(Eb,-)N", "G-(S)", "C(P')", "C(LRLRLR)"):
+        want, _ = evaluate(expr)
+        got = format_steps(expr).strip().split('=')[-1].strip()
+        check(f"steps faithful {expr}", got, want)
+
+    # Prefix-then-suffix order.
+    check("iter order LR + P",
+          list(_iter_side_tokens("LR")) + list(_iter_side_tokens("P")),
+          ['L', 'R', 'P'])
 
     print(f"\n{passed} passed, {failed} failed.")
     return failed == 0

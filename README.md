@@ -19,7 +19,7 @@ in parentheses, e.g. `(LR)` = L then R.
 ## Examples
 
     >>> C (LR)         apply L then R to the C major triad
-    >>> (P) F#m        apply the UTT <+,2,10> to the C major triad
+    >>> (P) F#m        apply P to the C major triad
     >>> (D,+)(RP)      apply R then P to the D major triad
     >>> (Eb,-) S2 W1   apply S2 then W1 to the Eb minor triad
     >>> [G,Bb,D](D2)   apply D2 to the G minor triad

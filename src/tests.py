@@ -18,6 +18,7 @@ def run_tests():
     nrt.SHOW_DESCR = False
     nrt.USE_COLOR = False
     nrt.MODE = 'lr'
+    nrt.LAST_TRIAD = None
 
     passed = failed = 0
 
@@ -140,9 +141,27 @@ def run_tests():
     d = describe_utt(UTT_TABLE['P'])
     check("inspect P riemannian", "Riemannian" in d, True)
 
+    # --- Spelled triad output uses stacked-thirds spelling ---
+    nrt.OUTPUT_STYLE = 'spell'
+    nrt.SPELLING = 'sharp'
+    check_eval("spell C minor uses E-flat", "(C,-)", "[C,E♭,G]")
+    nrt.SPELLING = 'flat'
+    check_eval("spell G-flat major", "(G♭,+)", "[G♭,B♭,D♭]")
+    nrt.SPELLING = 'sharp'
+    nrt.OUTPUT_STYLE = 'tuple'
+
     # --- Error paths ---
     check_error("no object",      lambda: evaluate("(LR)(PP)"))
     check_error("bad operator",   lambda: group_to_utt("Z"))
+    nrt.LAST_TRIAD = None
+    check_error("memory empty",   lambda: evaluate("_"))
+
+    # --- Last-result memory '_' ---
+    check_eval("memory seed", "(C,+)(LR)", "(G,+)")
+    check_eval("memory recall", "_", "(G,+)")
+    check_eval("memory apply", "_(P)", "(G,-)")
+    check_eval("memory reseed", "(C,+)(LR)", "(G,+)")
+    check_eval("memory apply compact", "_P", "(G,-)")
 
     # --- format_steps (--steps): keep user sequence, expand compounds ---
     nrt.OUTPUT_STYLE = 'tuple'

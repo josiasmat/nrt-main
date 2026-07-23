@@ -10,7 +10,7 @@ import re
 import sys
 
 from triad import Triad, Note, find_triads, PC_TO_SHARP, PC_TO_FLAT, \
-    NOTE_TO_PC, NAME_SHARP, NAME_FLAT
+    NOTE_TO_PC, NAME_SHARP, NAME_FLAT, set_preferred_accidental
 from transforms import NRT
 
 from help import print_help
@@ -30,6 +30,7 @@ SPELLING = 'auto'
 OUTPUT_STYLE = 'input'
 SHOW_DESCR = False   # append full description (e.g. "C major triad")
 USE_COLOR = False   # set at startup; controls path: colouring
+LAST_TRIAD = None   # memory state: (root_pc, mode_int)
 
 # Triads whose roots are conventionally written with flats (used by 'auto').
 FLAT_ROOTS = {1, 3, 8, 10}   # Db, Eb, Ab, Bb
@@ -53,6 +54,42 @@ def _nrt():
         spelling=SPELLING,
         show_description=SHOW_DESCR,
     )
+
+
+def _memory_token():
+    """Return the memorized triad as a canonical tuple token."""
+    if LAST_TRIAD is None:
+        raise ValueError("no previous triad in memory ('_')")
+    root, mode = LAST_TRIAD
+    return f"({PC_TO_SHARP[root % 12]},{'+' if mode == 1 else '-'})"
+
+
+def _resolve_memory(expr):
+    """Replace '_' object tokens with the last computed triad token."""
+    if '_' not in expr:
+        return expr
+    token = _memory_token()
+    out = []
+    in_utt = False
+    for ch in expr:
+        if ch == '<':
+            in_utt = True
+            out.append(ch)
+            continue
+        if ch == '>':
+            in_utt = False
+            out.append(ch)
+            continue
+        if ch == '_' and not in_utt:
+            out.append(token)
+            continue
+        out.append(ch)
+    return ''.join(out)
+
+
+def _set_last_triad(root, mode):
+    global LAST_TRIAD
+    LAST_TRIAD = (root % 12, mode)
 
 
 def notes_of(root, mode):
@@ -510,9 +547,19 @@ def sigma(mode, chars = ['+','-']):
 
 
 def spell_triad(root, sharp, mode):
-    """Return a list of the three spelled-out notes of a triad."""
-    parts = [_full_name(n, sharp, root_hint=root) for n in notes_of(root, mode)]
-    return '[' + ','.join(parts) + ']'
+    """Return a spelled triad list using Triad core spelling logic."""
+    if SPELLING == 'sharp':
+        pref = 'sharp'
+    elif SPELLING == 'flat':
+        pref = 'flat'
+    elif SPELLING == 'auto':
+        pref = 'flat' if (root % 12) in FLAT_ROOTS else 'sharp'
+    else:  # input
+        pref = 'sharp' if sharp else 'flat'
+
+    set_preferred_accidental(pref)
+    triad = Triad(root, '+' if mode == 1 else '-', accidental=pref)
+    return triad.str_spelled(lowercase=False, brackets='[]', pretty=True)
 
 
 def format_output(root, mode, style):
@@ -679,9 +726,8 @@ def _format_input_form(root, mode, style):
     if form == 'paren_bare':
         return f'({format_root(root, sharp, upper=(mode == 1), root_hint=root)})'
     if form == 'triple':
-        parts = [format_root(n, sharp, mode == 1, root_hint=root)
-                 for n in notes_of(root, mode)]
-        return '[' + ','.join(parts) + ']'
+        chord = spell_triad(root, sharp, mode)
+        return chord if mode == 1 else chord.lower()
     if form == 'paren':
         return (f'({format_root(root, sharp, True, root_hint=root)},'
                 f'{"+" if mode == 1 else "-"})')
@@ -699,10 +745,12 @@ def _format_input_form(root, mode, style):
 # --- Evaluation ---
 def evaluate(expr):
     """Evaluate an expression: apply its operators to the object."""
+    expr = _resolve_memory(expr)
     prefix, obj, suffix = find_object(expr)
     root, mode, style = parse_object(obj)
     root, mode = apply_side((root, mode), prefix)
     root, mode = apply_side((root, mode), suffix)
+    _set_last_triad(root, mode)
     return format_output(root, mode, style), mode
 
 
@@ -712,6 +760,7 @@ def format_steps(expr):
     Keeps the operators as given by the user (compounds expanded to atomic
     generators); does NOT reduce to a shortest path.
     """
+    expr = _resolve_memory(expr)
     prefix, obj, suffix = find_object(expr)
     root, mode, style = parse_object(obj)
 
@@ -720,6 +769,7 @@ def format_steps(expr):
     for tok in tokens:
         root, mode = utt(root, mode, *token_to_utt(tok))
         parts.append(f" {_op_label(_pretty_token(tok))} → {_triad_label(root, mode)}")
+    _set_last_triad(root, mode)
 
     n = len(tokens)
     header = f"{n} step{'s' if n != 1 else ''}:"

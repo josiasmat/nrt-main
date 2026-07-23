@@ -20,6 +20,7 @@ OBJECT FORMATS (all examples denote the same C major/minor triads):
   (C,M)   (C,m)      root with polarity inside parentheses
   [C,E,G] {C,Eb,G}   spelled triad inside brackets or braces
   [c,e,g] {c,eb,g}   (parentheses are NOT accepted here)
+  _                  last triad result (memory)
 
   Accidentals on input: '#' = sharp, 'b' = flat  (e.g. Eb, F#).
 

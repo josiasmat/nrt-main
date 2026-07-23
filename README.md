@@ -43,6 +43,7 @@ All examples denote the same C major/minor triads.
 | `(C,+)` `(C,-)` | root with polarity inside parentheses |
 | `(C,M)` `(C,m)` | root with polarity inside parentheses |
 | `[C,E,G]` `{C,Eb,G}` | spelled triad inside brackets or braces (parentheses are **NOT** accepted here) |
+| `_` | last triad result from memory |
 
 **Accidentals on input:** `#` = sharp, `b` = flat (e.g. `Eb`, `F#`).
 

@@ -17,29 +17,37 @@ NAME_FLAT  = ['C', 'D-flat', 'D', 'E-flat', 'E', 'F',
 
 _preferred_accidental = 'auto'  # 'auto', 'sharp', or 'flat'
 _preferred_triad_spelling = 'auto'  # 'auto', 'short', or 'long'
+_LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
 
 
 class Note:
     """Class representing a musical note with a pitch class and optional accidental."""
 
-    def __init__(self, pc, accidental=None):
+    def __init__(self, pc, accidental=None, letter=None, name=None):
         self.pc = pc % 12
         self.accidental = accidental
+        self.letter = letter
+        self.name = name
 
     @classmethod
     def from_string(cls, s):
         """Convert a string like 'C', 'C#', 'Db' to a Note object."""
         s = _depretty(s.strip())
         if not s: raise ValueError("Empty note string")
-        # Normalize the note letter only; keep accidental spelling.
-        s = s[0].upper() + s[1:]
-        if s in NOTE_TO_PC:
-            return cls(NOTE_TO_PC[s], None)
-        if s in PC_TO_SHARP:
-            return cls(PC_TO_SHARP.index(s), 'sharp')
-        if s in PC_TO_FLAT:
-            return cls(PC_TO_FLAT.index(s), 'flat')
-        raise ValueError(f"Invalid note string: {s}")
+        m = re.fullmatch(r'([A-Ga-g])([#b]*)', s)
+        if not m:
+            raise ValueError(f"Invalid note string: {s}")
+        letter = m.group(1).upper()
+        acc = m.group(2)
+        pc = (NOTE_TO_PC[letter] + acc.count('#') - acc.count('b')) % 12
+        if not acc:
+            accidental = None
+        elif '#' in acc and 'b' in acc:
+            raise ValueError(f"Invalid mixed accidental string: {s}")
+        else:
+            accidental = 'sharp' if '#' in acc else 'flat'
+        name = letter + acc
+        return cls(pc, accidental, letter=letter, name=name)
 
     def __eq__(self, other):
         if isinstance(other, Note):
@@ -47,6 +55,8 @@ class Note:
         return NotImplemented
 
     def __str__(self):
+        if self.name is not None:
+            return self.name
         if self.accidental == 'sharp':
             return PC_TO_SHARP[self.pc]
         if self.accidental == 'flat':
@@ -71,6 +81,23 @@ MINOR_SPECIFIERS = ['-', 'm', 'min', 'minor']
 
 def _depretty(note):
     return note.replace('♭', 'b').replace('♯', '#')
+
+
+def set_preferred_accidental(value):
+    if value not in ('auto', 'sharp', 'flat'):
+        raise ValueError("preferred accidental must be 'auto', 'sharp', or 'flat'")
+    global _preferred_accidental
+    _preferred_accidental = value
+
+
+def _accidental_suffix(letter, target_pc):
+    natural_pc = NOTE_TO_PC[letter]
+    diff = (target_pc - natural_pc) % 12
+    if diff == 0:
+        return ''
+    if diff <= 6:
+        return '#' * diff
+    return 'b' * (12 - diff)
 
 
 class Triad:
@@ -156,11 +183,21 @@ class Triad:
     def third(self):
         """Return the third of the triad as a named note."""
         interval = 4 if self._mode == '+' else 3
-        return Note((self._root.pc + interval) % 12, self._root.accidental)
+        target_pc = (self._root.pc + interval) % 12
+        root_letter = self._root.letter or str(self._root)[0].upper()
+        letter_idx = _LETTERS.index(root_letter)
+        third_letter = _LETTERS[(letter_idx + 2) % 7]
+        name = third_letter + _accidental_suffix(third_letter, target_pc)
+        return Note.from_string(name)
 
     def fifth(self):
         """Return the fifth of the triad as a named note."""
-        return Note((self._root.pc + 7) % 12, self._root.accidental)
+        target_pc = (self._root.pc + 7) % 12
+        root_letter = self._root.letter or str(self._root)[0].upper()
+        letter_idx = _LETTERS.index(root_letter)
+        fifth_letter = _LETTERS[(letter_idx + 4) % 7]
+        name = fifth_letter + _accidental_suffix(fifth_letter, target_pc)
+        return Note.from_string(name)
 
     def notes(self):
         """Return a tuple of the triad's notes in order: root, third, fifth."""

@@ -2,6 +2,11 @@ name: Build
 
 on:
   push:
+    branches:
+      - main
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -17,3 +22,24 @@ jobs:
 
       - name: Run build script
         run: bash ./build.sh
+
+      - name: Compute prerelease version
+        run: |
+          echo "VERSION_TAG=r${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+
+      - name: Create version tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${VERSION_TAG}"
+          git push origin "refs/tags/${VERSION_TAG}"
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: ${{ env.VERSION_TAG }}
+          prerelease: true
+          files: nrt.pyz
+          body: |
+            Automated unstable build `${{ env.VERSION_TAG }}` from commit `${{ github.sha }}`.

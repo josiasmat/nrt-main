@@ -4,21 +4,13 @@ A python script that reads and evaluates neo-riemannian expressions.
 
 ## Run
 
-Download the `nrt.pyz` file and run with `python nrt.pyz`.
+Download the script from:
 
-## Library API (`NRT` class)
+https://github.com/josiasmat/nrt-main/releases/latest/download/nrt.pyz
 
-The project now includes an `NRT` class in `transforms.py` for programmatic use.
+and run inside a terminal with: `python nrt.pyz`.
 
-```python
-from transforms import NRT
-from triad import Triad
-
-nrt = NRT(mode='lr', output_style='tuple', spelling='input')
-result = nrt.apply(Triad.from_string("C"), "LR")   # Triad object
-text = nrt.format_triad(result, style='tuple')     # "(G,+)"
-info = nrt.inspect("PLR")                          # UTT summary text
-```
+Requires Python 3.6 or newer.
 
 # How to use
 

@@ -23,7 +23,7 @@ jobs:
       - name: Run build script
         run: bash ./build.sh
 
-      - name: Compute prerelease version
+      - name: Compute release version
         run: |
           echo "VERSION_TAG=r${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
 
@@ -35,11 +35,10 @@ jobs:
           git push origin "refs/tags/${VERSION_TAG}"
 
       - name: Publish prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION_TAG }}
           name: ${{ env.VERSION_TAG }}
-          prerelease: true
           files: nrt.pyz
           body: |
-            Automated unstable build `${{ env.VERSION_TAG }}` from commit `${{ github.sha }}`.
+            Automated build `${{ env.VERSION_TAG }}` from commit `${{ github.sha }}`.

@@ -6,7 +6,7 @@ A python script that reads and evaluates neo-riemannian expressions.
 
 Download the script from:
 
-https://github.com/josiasmat/nrt-main/releases/latest/download/nrt.pyz
+https://github.com/josiasmat/nrt-eval/releases/latest/download/nrt.pyz
 
 and run inside a terminal with: `python nrt.pyz`.
 

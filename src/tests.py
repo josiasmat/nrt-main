@@ -6,7 +6,7 @@ from nrt import (
     evaluate, _iter_side_tokens, token_to_utt,
     _all_shortest, resolve_path_ops, _pretty_token,
     compress_word, describe_utt, format_steps,
-    UTT_TABLE, IDENTITY_UTT, PATH_PRESETS
+    UTT_TABLE, IDENTITY_UTT, PATH_PRESETS, parse_path
 )
 
 # --- Automated tests ----------------------------------------------------
@@ -162,6 +162,7 @@ def run_tests():
     check_eval("memory apply", "_(P)", "(G,-)")
     check_eval("memory reseed", "(C,+)(LR)", "(G,+)")
     check_eval("memory apply compact", "_P", "(G,-)")
+    check("path parse memory start", parse_path("_ (C,+)"), ((7, -1), (0, 1)))
 
     # --- format_steps (--steps): keep user sequence, expand compounds ---
     nrt.OUTPUT_STYLE = 'tuple'

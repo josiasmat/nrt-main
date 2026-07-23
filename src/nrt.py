@@ -778,6 +778,7 @@ def format_steps(expr):
 
 def parse_path(text):
     """Parse 'O1 O2' into two (root, mode) states via find_object."""
+    text = _resolve_memory(text)
     prefix, obj1, rest = find_object(text)
     if prefix.strip():
         raise ValueError(f"unexpected text before first triad: {prefix!r}")

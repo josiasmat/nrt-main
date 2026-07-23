@@ -9,20 +9,12 @@ without an object are normalized into a single UTT and inspected.
 import re
 import sys
 
+from triad import Triad, Note, find_triads, PC_TO_SHARP, PC_TO_FLAT, \
+    NOTE_TO_PC, NAME_SHARP, NAME_FLAT
+from transforms import NRT
 
-# --- Pitch-class tables ---
-PC_TO_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-PC_TO_FLAT  = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
+from help import print_help
 
-NOTE_TO_PC = {
-    'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11,
-}
-
-# Full names of pitch classes (used for the spelled-out triad description).
-NAME_SHARP = ['C', 'C-sharp', 'D', 'D-sharp', 'E', 'F',
-              'F-sharp', 'G', 'G-sharp', 'A', 'A-sharp', 'B']
-NAME_FLAT  = ['C', 'D-flat', 'D', 'E-flat', 'E', 'F',
-              'G-flat', 'G', 'A-flat', 'A', 'B-flat', 'B']
 
 # --- Application order for juxtaposed operators ---
 # 'lr' = left-to-right (L R  =>  apply L then R)   [default]
@@ -53,22 +45,14 @@ C_OP    = '\033[97m'  # magenta
 C_RESET = '\033[0m'
 
 
-# --- Parsing helpers ---
-def parse_note(note):
-    """Return the pitch class (0-11) of a note name like 'C', 'Eb', 'F#'."""
-    note = note.strip()
-    pc = NOTE_TO_PC[note[0].upper()]
-    for acc in note[1:]:
-        if acc in '#':
-            pc += 1
-        elif acc in 'bB':
-            pc -= 1
-    return pc % 12
-
-
-def _is_sharp(note):
-    """Heuristic: True if the note is spelled with a sharp (or is natural)."""
-    return 'b' not in note[1:] and 'B' not in note[1:]
+def _nrt():
+    """Build an NRT engine from current global runtime settings."""
+    return NRT(
+        mode=MODE,
+        output_style=OUTPUT_STYLE,
+        spelling=SPELLING,
+        show_description=SHOW_DESCR,
+    )
 
 
 def notes_of(root, mode):
@@ -78,79 +62,59 @@ def notes_of(root, mode):
 
 
 # --- Object detection / parsing ---
-def _looks_like_object(inner):
-    """True if the parenthesised/bracketed content denotes a triad object."""
-    inner = inner.strip()
-    if re.fullmatch(r'[A-Ga-g][#bB]?', inner):                            # C or c
-        return True
-    if re.fullmatch(r'[A-Ga-g][#bB]?\s*[Mm+\-]', inner):                  # Gm, C+, C-
-        return True
-    if re.fullmatch(r'[A-Ga-g][#bB]?\s*,\s*[+\-MmAa]', inner):            # C,+
-        return True
-    if re.fullmatch(r'([A-Ga-g][#bB]?\s*,\s*){2}[A-Ga-g][#bB]?', inner):  # C,E,G
-        return True
-    return False
+_NOTE_RE = r'[A-Ga-g](?:[#b♯♭])?'
+_CANDIDATE_RE = re.compile(
+    rf'''
+    \(\s*{_NOTE_RE}\s*,\s*[+\-Mm]\s*\) |
+    [\[\{{]\s*{_NOTE_RE}\s*,\s*{_NOTE_RE}\s*,\s*{_NOTE_RE}\s*[\]\}}] |
+    \(\s*{_NOTE_RE}(?:[+\-Mm]|min|minor)?\s*\) |
+    {_NOTE_RE}(?:[+\-Mm]|min|minor)?
+    ''',
+    re.VERBOSE,
+)
+
+
+def _root_is_sharp(root):
+    """Heuristic: True if the root should be treated as sharp/natural."""
+    if not isinstance(root, Note):
+        raise TypeError(f"root must be a Note, got {type(root).__name__}")
+    return root.accidental != 'flat'
+
+
+def _style_for_token(token, triad):
+    """Infer the input style dictionary for output formatting."""
+    sharp = _root_is_sharp(triad.root())
+
+    if re.fullmatch(rf'\(\s*{_NOTE_RE}\s*\)', token):
+        return {'form': 'paren_bare', 'sharp': sharp}
+    if re.fullmatch(rf'[\[\{{]\s*{_NOTE_RE}\s*,\s*{_NOTE_RE}\s*,\s*{_NOTE_RE}\s*[\]\}}]', token):
+        return {'form': 'triple', 'sharp': sharp}
+
+    m = re.fullmatch(rf'\(\s*{_NOTE_RE}\s*([Mm+\-])\s*\)', token)
+    if m:
+        return {'form': 'suffix', 'sharp': sharp, 'suf': m.group(1)}
+
+    m = re.fullmatch(rf'\(\s*{_NOTE_RE}\s*,\s*([+\-])\s*\)', token)
+    if m:
+        return {'form': 'paren', 'sharp': sharp}
+
+    m = re.fullmatch(rf'{_NOTE_RE}\s*([Mm+\-])', token)
+    if m:
+        return {'form': 'suffix', 'sharp': sharp, 'suf': m.group(1)}
+
+    return {'form': 'plain', 'sharp': sharp}
 
 
 def parse_object(s):
     """Parse an object token; return (root, mode, style)."""
-    s = s.strip()
-
-    # Bare note in parentheses: (C) or (c)
-    m = re.fullmatch(r'\(\s*([A-Ga-g][#bB]?)\s*\)', s)
-    if m:
-        note = m.group(1)
-        mode = 1 if note[0].isupper() else -1
-        return parse_note(note), mode, {'form': 'paren_bare', 'sharp': _is_sharp(note)}
-
-    # Spelled triad in brackets or braces: [C,Eb,G] or {C,Eb,G}
-    m = re.fullmatch(r'[\[{]\s*([A-Ga-g][#bB]?)\s*,\s*([A-Ga-g][#bB]?)\s*,'
-                     r'\s*([A-Ga-g][#bB]?)\s*[\]}]', s)
-    if m:
-        n1, n2, n3 = m.group(1), m.group(2), m.group(3)
-        root = parse_note(n1)
-        interval = (parse_note(n2) - root) % 12
-        mode = 1 if interval == 4 else -1
-        return root, mode, {'form': 'triple', 'sharp': _is_sharp(n1)}
-
-    # Root with mode suffix inside parentheses: (Gm) (C+) (C-)
-    m = re.fullmatch(r'\(\s*([A-Ga-g][#bB]?)\s*([Mm+\-])\s*\)', s)
-    if m:
-        note, suf = m.group(1), m.group(2)
-        mode = 1 if suf in ('M', '+') else -1
-        return parse_note(note), mode, {'form': 'suffix', 'sharp': _is_sharp(note),
-                                        'suf': suf}
-
-    # Root with polarity: (C,+) / (C,-)
-    m = re.fullmatch(r'\(\s*([A-Ga-g][#bB]?)\s*,\s*([+\-])\s*\)', s)
-    if m:
-        note, pol = m.group(1), m.group(2)
-        mode = 1 if pol == '+' else -1
-        return parse_note(note), mode, {'form': 'paren', 'sharp': _is_sharp(note)}
-
-    # Root with mode suffix: CM / Cm / C+ / C-
-    m = re.fullmatch(r'([A-Ga-g][#bB]?)\s*([Mm+\-])', s)
-    if m:
-        note, suf = m.group(1), m.group(2)
-        mode = 1 if suf in ('M', '+') else -1
-        return parse_note(note), mode, {'form': 'suffix', 'sharp': _is_sharp(note),
-                                        'suf': suf}
-
-    # Plain note: C (major) / c (minor)
-    m = re.fullmatch(r'([A-Ga-g][#bB]?)', s)
-    if m:
-        note = m.group(1)
-        mode = 1 if note[0].isupper() else -1
-        return parse_note(note), mode, {'form': 'plain', 'sharp': _is_sharp(note)}
-
-    raise ValueError(f"cannot parse object: {s!r}")
+    triad, style = _nrt().parse_object(s.strip())
+    mode = 1 if triad.mode() == '+' else -1
+    return triad.root().pc, mode, style
 
 
 def _in_utt_literal(expr, pos):
     """True if position `pos` falls inside a '<...>' UTT literal."""
-    lt = expr.rfind('<', 0, pos)
-    gt = expr.find('>', pos)
-    return lt != -1 and gt != -1 and lt < pos < gt
+    return _nrt()._in_utt_literal(expr, pos)
 
 
 def find_object(expr):
@@ -160,40 +124,12 @@ def find_object(expr):
     real object, fall back to a bare object token (Cm, C+, c, ...). Anything
     inside a '<...>' UTT literal is skipped.
     """
-    # 1) Delimited objects: (C,+), [C,E,G], {C,E,G}
-    for m in re.finditer(r'[(\[{]([^()\[\]{}]*)[)\]}]', expr):
-        if _in_utt_literal(expr, m.start()):
-            continue
-        if _looks_like_object(m.group(1)):
-            return expr[:m.start()], m.group(0), expr[m.end():]
-
-    # 2) Bare object token: root (+ optional accidental) + optional mode marker.
-    #    Skip anything inside a delimited group ((...), [...], {...}) or a
-    #    <...> UTT literal — those are operators/spelled objects, not bare roots.
-    def _in_delimited(pos):
-        depth_paren = expr.count('(', 0, pos) - expr.count(')', 0, pos)
-        depth_brack = expr.count('[', 0, pos) - expr.count(']', 0, pos)
-        depth_brace = expr.count('{', 0, pos) - expr.count('}', 0, pos)
-        return depth_paren > 0 or depth_brack > 0 or depth_brace > 0
-
-    for m in re.finditer(r'[A-Ga-g][#bB]?(?:[Mm+\-])?', expr):
-        if _in_utt_literal(expr, m.start()) or _in_delimited(m.start()):
-            continue
-        tok = m.group(0)
-        if re.fullmatch(r'[A-Ga-g][#bB]?(?:[Mm+\-])?', tok) and \
-                tok[0] in 'ABCDEFGabcdefg':
-            return expr[:m.start()], tok, expr[m.end():]
-
-    raise ValueError("no object found in expression")
+    return _nrt().find_object(expr)
 
 
 def has_object(expr):
     """True if the expression contains a triad object."""
-    try:
-        find_object(expr)
-        return True
-    except ValueError:
-        return False
+    return bool(find_triads(expr))
 
 
 # --- UTT algebra --------------------------------------------------------
@@ -201,7 +137,7 @@ def has_object(expr):
 #   sigma in {+1, -1} : keep (+1) or invert (-1) the mode
 #   t+ : transposition applied to a MAJOR triad
 #   t- : transposition applied to a MINOR triad
-IDENTITY_UTT = (1, 0, 0)
+IDENTITY_UTT = NRT.IDENTITY_UTT
 
 
 def utt(root, mode, sigma, tp, tm):
@@ -216,24 +152,11 @@ def compose_utt(u2, u1):
     Hook's composition law:
         <s2,u+,u-> o <s1,t+,t-> = <s1*s2, t+ + u^(s1), t- + u^(-s1)>
     """
-    s1, tp, tm = u1
-    s2, up, um = u2
-    if s1 == 1:      # u1 keeps mode
-        add_p, add_m = up, um
-    else:            # u1 flips mode
-        add_p, add_m = um, up
-    return (s1 * s2, (tp + add_p) % 12, (tm + add_m) % 12)
+    return NRT.compose_utt(u2, u1)
 
 
 # Neo-Riemannian generators as UTT triples <sigma, t+, t->.
-UTT_TABLE = {
-    'P': (-1, 0, 0),   # Parallel
-    'L': (-1, 4, 8),   # Leittonwechsel
-    'R': (-1, 9, 3),   # Relative
-    'N': (-1, 5, 7),   # Nebenverwandt (= RLP)
-    'H': (-1, 8, 4),   # Hexatonic pole (= PLP)
-    'S': (-1, 1, 11),  # Slide (bare 'S'; 'Sn' with a digit = Schritt)
-}
+UTT_TABLE = dict(NRT().utt_table)
 
 
 # --- Path generator presets --------------------------------------------
@@ -409,21 +332,12 @@ UTT_TABLE["R'"] = _obverse('L', 'R', 'P')   # R' = LRP
 
 def _parse_sigma(tok):
     """Parse a sigma field: '+', '-', '+1', '-1', '1'."""
-    tok = tok.strip()
-    if tok in ('+', '+1', '1'):
-        return 1
-    if tok in ('-', '-1'):
-        return -1
-    raise ValueError(f"invalid sigma in UTT: {tok!r}")
+    return NRT._parse_sigma(tok)
 
 
 def parse_utt_literal(s):
     """Parse a literal UTT '<sigma,tp,tm>' into a triple."""
-    m = re.fullmatch(r'<\s*([^,]+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*>', s.strip())
-    if not m:
-        raise ValueError(f"cannot parse UTT: {s!r}")
-    sigma = _parse_sigma(m.group(1))
-    return (sigma, int(m.group(2)) % 12, int(m.group(3)) % 12)
+    return _nrt().parse_utt_literal(s)
 
 
 def token_to_utt(token):
@@ -432,37 +346,7 @@ def token_to_utt(token):
     Recognized: P L R N H S (and P' L' R'); Tn, Dn, Sn (Schritt), Wn
     (Wechsel), In (Inversion), and literal <...> UTTs.
     """
-    if token in UTT_TABLE:
-        return UTT_TABLE[token]
-
-    m = re.fullmatch(r'T(-?\d+)', token)          # transposition
-    if m:
-        n = int(m.group(1)) % 12
-        return (1, n, n)
-
-    m = re.fullmatch(r'D(-?\d+)', token)          # Dominant: Dn = <+,5n,5n>
-    if m:
-        v = (5 * int(m.group(1))) % 12
-        return (1, v, v)
-
-    m = re.fullmatch(r'S(-?\d+)', token)          # Schritt Qn = <+, n, -n>
-    if m:
-        n = int(m.group(1)) % 12
-        return (1, n, (-n) % 12)
-
-    m = re.fullmatch(r'W(-?\d+)', token)          # Wechsel Qn o P = <-, -n, n>
-    if m:
-        n = int(m.group(1)) % 12
-        return (-1, (-n) % 12, n)
-
-    m = re.fullmatch(r'I(-?\d+)?', token)         # Inversion: I = I0 = <-,0,0>
-    if m:
-        n = 0 if m.group(1) is None else int(m.group(1)) % 12
-        return (-1, n, n)
-
-    if token.startswith('<'):
-        return parse_utt_literal(token)
-    raise ValueError(f"unknown operator: {token!r}")
+    return _nrt().token_to_utt(token)
 
 
 # --- Operator tokenization / reduction ---
@@ -472,53 +356,7 @@ def expand_group(group):
     Handles P L R N H, the primes P' L' R', bare Slide S, the parametrized
     families T/D/S/W/I (each optionally signed), and literal <...> UTTs.
     """
-    tokens = []
-    i = 0
-    n = len(group)
-    while i < n:
-        c = group[i]
-        if c in 'PLR':
-            # possible prime: P', L', R'
-            if i + 1 < n and group[i + 1] == "'":
-                tokens.append(group[i:i + 2])
-                i += 2
-            else:
-                tokens.append(c)
-                i += 1
-        elif c in 'NH':
-            tokens.append(c)
-            i += 1
-        elif c in 'TDSWI':
-            j = i + 1
-            if j < n and group[j] == '-':
-                j += 1
-            while j < n and group[j].isdigit():
-                j += 1
-            # 'S' bare = Slide; 'I' bare = I0; D/T/S/W otherwise need a number.
-            if j == i + 1:
-                if c == 'S':                  # bare Slide (in UTT_TABLE)
-                    tokens.append(c)
-                    i = j
-                    continue
-                if c == 'I':                  # bare Inversion = I0
-                    tokens.append(c)
-                    i = j
-                    continue
-                raise ValueError(f"operator {c!r} requires a number "
-                                 f"(e.g. {c}1)")
-            tokens.append(group[i:j])
-            i = j
-        elif c == '<':
-            j = group.find('>', i)
-            if j == -1:
-                raise ValueError("unterminated UTT literal '<...>'")
-            tokens.append(group[i:j + 1])
-            i = j + 1
-        elif c.isspace():
-            i += 1
-        else:
-            raise ValueError(f"unexpected character in operators: {c!r}")
-    return tokens
+    return _nrt().expand_group(group)
 
 
 def group_to_utt(group):
@@ -527,28 +365,12 @@ def group_to_utt(group):
     In 'lr' mode tokens apply left to right: 't1 t2 t3' == t3 o t2 o t1.
     In 'rl' mode tokens apply right to left: 't1 t2 t3' == t1 o t2 o t3.
     """
-    tokens = expand_group(group)
-    if MODE == 'rl':
-        tokens = reversed(tokens)
-    result = IDENTITY_UTT
-    for token in tokens:
-        result = compose_utt(token_to_utt(token), result)
-    return result
+    return _nrt().group_to_utt(group)
 
 
 def side_to_utt(text):
     """Reduce one side (prefix or suffix) of an expression to a single UTT."""
-    text = text.replace(' ', '')
-    result = IDENTITY_UTT
-    if not text:
-        return result
-    groups = re.findall(r'\(([^()]*)\)', text)
-    seq = groups if groups else [text]
-    if MODE == 'rl':
-        seq = list(reversed(seq))
-    for g in seq:
-        result = compose_utt(group_to_utt(g), result)
-    return result
+    return _nrt().to_utt(text)
 
 
 def apply_side(state, text):
@@ -559,14 +381,7 @@ def apply_side(state, text):
 
 # Canonical decomposition of compound operators into P/L/R generators.
 # Matches UTT_TABLE / _obverse definitions (H=PLP, N=PLR, S=LPR, primes=obverse).
-COMPOUND_EXPANSION = {
-    'H':  ['P', 'L', 'P'],   # hexatonic pole
-    'N':  ['P', 'L', 'R'],   # nebenverwandt
-    'S':  ['L', 'P', 'R'],   # slide
-    "P'": ['R', 'P', 'L'],   # P-prime (obverse)
-    "L'": ['R', 'L', 'P'],   # L-prime
-    "R'": ['L', 'R', 'P'],   # R-prime
-}
+COMPOUND_EXPANSION = dict(NRT.COMPOUND_EXPANSION)
 
 
 def _iter_side_tokens(text):
@@ -576,23 +391,7 @@ def _iter_side_tokens(text):
     Compound operators (H, N, S, P', L', R') are expanded into their
     canonical P/L/R generators. Application order respects MODE.
     """
-    text = text.replace(' ', '')
-    if not text:
-        return
-    groups = re.findall(r'\(([^()]*)\)', text)
-    seq = groups if groups else [text]
-    if MODE == 'rl':
-        seq = list(reversed(seq))
-    for g in seq:
-        toks = expand_group(g)
-        if MODE == 'rl':
-            toks = list(reversed(toks))
-        for t in toks:
-            expanded = COMPOUND_EXPANSION.get(t)
-            if expanded is not None:
-                yield from (reversed(expanded) if MODE == 'rl' else expanded)
-            else:
-                yield t
+    yield from _nrt().iter_atomic_tokens(text)
 
 
 # --- UTT inspection ---
@@ -948,112 +747,6 @@ def colorize(text, mode):
     return f'{code}{text}{C_RESET}'
 
 
-# --- CLI / REPL ---
-HELP_TEXT = """\
-An expression consists of one OBJECT (a triad) with OPERATORS applied to it.
-Operators may appear before and/or after the object; they are applied left to
-right (prefix first, then suffix). Spaces are ignored. Operators may be 
-grouped in parentheses, e.g. (LR) = L then R.
-
-EXAMPLES:
-  >>> C (LR)         apply L then R to the C major triad
-  >>> (P) F#m        apply the UTT <+,2,10> to the C major triad
-  >>> (D,+)(RP)      apply R then P to the D major triad
-  >>> (Eb,-) S2 W1   apply S2 then W1 to the Eb minor triad
-  >>> [G,Bb,D](D2)   apply D2 to the G minor triad
-  >>> G- <+,2,10>    apply the UTT <+,2,10> to the G minor triad
-
-OBJECT FORMATS (all examples denote the same C major/minor triads):
-  C  (C)  c  (c)     plain: uppercase = major, lowercase (c) = minor
-  C+ (C+) C- (C-)
-  CM (CM) Cm (Cm)    root + mode suffix (M/+ = major, m/- = minor)
-  (C,+)   (C,-)
-  (C,M)   (C,m)      root with polarity inside parentheses
-  [C,E,G] {C,Eb,G}   spelled triad inside brackets or braces
-                     (parentheses are NOT accepted here)
-
-  Accidentals on input: '#' = sharp, 'b' = flat  (e.g. Eb, F#).
-
-OPERATORS:
-  P      Parallel
-  L      Leittonwechsel
-  R      Relative
-
-  S      Slide           = LPR / RPL / P'
-  N      Nebenverwandt   = PLR / RLP / L'
-  H      Hexatonic pole  = PLP
-
-  P'     P prime         = LPR / RPL / S
-  L'     L prime         = PLR / RLP / N
-  R'     R prime         = LRP / PRL
-
-  D<n>   Dominant        Transpose n fifths down
-  T<n>   Transposition   Transpose n semitones up
-  I<n>   Inversion       ⟨-, n, n⟩     (I alone = I0 = P)
-
-  S<n>   Schritt (Hook)  ⟨+, n, -n⟩    (S with a digit; bare S = Slide)
-  W<n>   Wechsel (Hook)  ⟨-, -n, n⟩    (= Sn o P)
-
-  <s,tp,tm>      literal UTT, e.g. <+,2,10> or <-,3,9>
-
-UTT LITERALS:
-  <s,tp,tm>    a Uniform Triadic Transformation (Hook 2002).
-               s  = + (keep mode) or - (invert mode)
-               tp = transposition applied to a major triad
-               tm = transposition applied to a minor triad
-               Example: <+,2,10>(C,+) -> (D,+)
-
-STEP-BY-STEP OUTPUT:
-  <expr> --steps   decompose the expression, showing each operator applied
-                   one at a time (like path:). The user's sequence is kept;
-                   compounds (H, N, S, P', L', R') expand to P/L/R generators.
-                   Example:  C (LR) --steps    (Gm)(H) --steps
-
-INSPECTION:
-  inspect:<ops>  normalize a transformation (no object) into a single
-                 UTT <s,tp,tm> and show its type, whether it is
-                 Riemannian, and its order.
-                 Respects the current mode:(lr/rl).
-                 Examples:  inspect:PLR    inspect:LR    inspect:<+,2,10>PL
-
-P/L/R PATH:
-  path:<O1><O2> [--ops SET]
-                 compute the shortest path between two triads O1 and O2.
-                 SET selects the generators:
-                   plr   P/L/R group       (default)
-                   hyer  adds Dominant D1  (P/L/R/D⁶)
-                   lr    L/R only
-                 or an explicit token list, e.g. --ops PLD⁶
-                 Examples:
-                   path: (C,+) (G,-)
-                   path --ops hyer (C,+) (G,+)
-                   path (C,+) (E,-) --ops lr
-
-OUTPUT STYLE:
-  out:input      inherit style from the object (default)
-  out:short      show triad as a short string (e.g. C+)
-  out:tuple      show triad as a (root,mode) tuple (e.g. (C,+))
-  out:spell      show triad as a spelled-out list of notes (e.g. [C,E,G])
-  out            show current output style
-
-DESCRIPTION IN OUTPUT:
-  desc:on        append a full description of the triad (e.g. "C major triad")
-  desc:off       omit the full description (default)
-  desc           show current description setting
-
-SPELLING COMMANDS (change how results are written):
-  spell:sharp    force sharps  (e.g. G#)
-  spell:flat     force flats   (e.g. Ab)
-  spell:auto     pick sharps/flats from the resulting root (conventional keys)
-  spell:input    inherit spelling from the object (default)
-  spell          show current spelling setting
-
-OTHER COMMANDS:
-  help           show this help
-  quit / exit    leave the program
-"""
-
-
 def _parse_flags(args):
     """Extract --sharp/--flat/--auto/--input from args; return (spelling, rest)."""
     spelling, rest = None, []
@@ -1099,7 +792,7 @@ def repl(use_color):
             break
 
         if low == 'help':
-            print(HELP_TEXT + "\n")
+            print_help()
             continue
 
         # inspect <operators> — normalize a transformation to a single UTT
@@ -1133,6 +826,20 @@ def repl(use_color):
                 gens = resolve_path_ops(ops_spec)
                 start, goal = parse_path(body)
                 print(format_path(start, goal, gens) + "\n")
+            except Exception as e:
+                print(f"Error: {e}\n")
+            continue
+
+        # follow:<expr> / follow <expr> — evaluate and show step-by-step process
+        if _is_cmd('follow', low):
+            arg = re.split(r'[:\s]+', line, maxsplit=1)
+            if len(arg) == 1 or not arg[1].strip():
+                print("Error: follow requires an expression "
+                      "(e.g. follow: (C,+)N)\n")
+                continue
+            expr = arg[1].strip()
+            try:
+                print(format_steps(expr) + "\n")
             except Exception as e:
                 print(f"Error: {e}\n")
             continue
@@ -1177,13 +884,14 @@ def repl(use_color):
             continue
 
         try:
-            m = re.search(r'\s*--(?:steps|decompose|verbose)\b', line)
-            text, mode = evaluate(line)
-            out = colorize(text, mode) if (use_color and mode is not None) else text
-            print(out + "\n")
+            m = re.search(r'\s*--follow\b', line)
+            expr = (line[:m.start()] + line[m.end():]).strip() if m else line
             if m:
-                expr = (line[:m.start()] + line[m.end():]).strip()
                 print(format_steps(expr) + "\n")
+            else:
+                text, mode = evaluate(expr)
+                out = colorize(text, mode) if (use_color and mode is not None) else text
+                print(out + "\n")
         except Exception as e:
             print(f"Error: {e}\n")
 
@@ -1191,7 +899,8 @@ def repl(use_color):
 def main():
     global SPELLING, USE_COLOR
     if '--test' in sys.argv[1:]:
-        ok = _run_tests()
+        from tests import run_tests
+        ok = run_tests()
         sys.exit(0 if ok else 1)
     use_color = sys.stdout.isatty()
     USE_COLOR = use_color
@@ -1221,9 +930,29 @@ def main():
             gens = resolve_path_ops(ops_spec)
             start, goal = parse_path(' '.join(filtered))
             print(format_path(start, goal, gens) + "\n")
+        elif rest[0] == 'follow':
+            expr = ' '.join(rest[1:]).strip()
+            if not expr:
+                print("Error: follow requires an expression")
+                sys.exit(1)
+            print(format_steps(expr) + "\n")
         else:
             joined = ' '.join(rest)
-            m = re.search(r'\s*--(?:steps|decompose|verbose)\b', joined)
+            if joined.startswith('follow:'):
+                expr = joined.split(':', 1)[1].strip()
+                if not expr:
+                    print("Error: follow requires an expression")
+                    sys.exit(1)
+                print(format_steps(expr) + "\n")
+                return
+            if joined.lower().startswith('follow '):
+                expr = joined[7:].strip()
+                if not expr:
+                    print("Error: follow requires an expression")
+                    sys.exit(1)
+                print(format_steps(expr) + "\n")
+                return
+            m = re.search(r'\s*--follow\b', joined)
             if m:
                 expr = (joined[:m.start()] + joined[m.end():]).strip()
                 print(format_steps(expr) + "\n")
@@ -1233,169 +962,6 @@ def main():
                 print(out + "\n")
     else:
         repl(use_color)
-
-
-# --- Automated tests ----------------------------------------------------
-def _run_tests():
-    """Self-contained regression tests. Run with:  python script.py --test"""
-    global OUTPUT_STYLE, SPELLING, SHOW_DESCR, USE_COLOR, MODE
-    # Deterministic settings.
-    OUTPUT_STYLE = 'tuple'
-    SPELLING = 'sharp'
-    SHOW_DESCR = False
-    USE_COLOR = False
-    MODE = 'lr'
-
-    passed = failed = 0
-
-    def check(desc, got, want):
-        nonlocal passed, failed
-        if got == want:
-            passed += 1
-        else:
-            failed += 1
-            print(f"FAIL: {desc}\n      got : {got!r}\n      want: {want!r}")
-
-    def check_split(desc, expr, want):
-        """find_object must return the expected (prefix, obj, suffix)."""
-        check(desc, find_object(expr), want)
-
-    def check_eval(desc, expr, want_tuple):
-        """evaluate() output (in tuple style) must match."""
-        text, _ = evaluate(expr)
-        check(desc, text, want_tuple)
-
-    def check_error(desc, fn):
-        nonlocal passed, failed
-        try:
-            fn()
-            failed += 1
-            print(f"FAIL: {desc}\n      expected an exception, none raised")
-        except Exception:
-            passed += 1
-
-    # --- find_object splitting (the regression that motivated the fix) ---
-    check_split("(Gm)(LRL) split",  "(Gm)(LRL)", ("", "(Gm)", "(LRL)"))
-    check_split("(Gm)LRL split",    "(Gm)LRL",   ("", "(Gm)", "LRL"))
-    check_split("Gm(LRL) split",    "Gm(LRL)",   ("", "Gm", "(LRL)"))
-    check_split("Gm LRL split",     "Gm LRL",    ("", "Gm", " LRL"))
-    check_split("(LRL)(Gm) split",  "(LRL)(Gm)", ("(LRL)", "(Gm)", ""))
-    check_split("(G+)(PLP) split",  "(G+)(PLP)", ("", "(G+)", "(PLP)"))
-    check_split("(c)(LR) split",    "(c)(LR)",   ("", "(c)", "(LR)"))
-    check_split("[G,Bb,D](D2)",     "[G,Bb,D](D2)", ("", "[G,Bb,D]", "(D2)"))
-    check_split("(C,+)(RP) split",  "(C,+)(RP)", ("", "(C,+)", "(RP)"))
-    check_split("literal skipped",  "<+,2,10>(C,+)",
-                ("<+,2,10>", "(C,+)", ""))
-    check_split("bare + two groups","C(LR)(P)",  ("", "C", "(LR)(P)"))
-
-    # --- parse_object accepts (Gm)-style ---
-    check("parse (Gm)", parse_object("(Gm)"),
-          (7, -1, {'form': 'suffix', 'sharp': True, 'suf': 'm'}))
-    check("parse (C+)", parse_object("(C+)"),
-          (0, 1, {'form': 'suffix', 'sharp': True, 'suf': '+'}))
-    check("parse (C-)", parse_object("(C-)"),
-          (0, -1, {'form': 'suffix', 'sharp': True, 'suf': '-'}))
-    check("parse (C#m)", parse_object("(C#m)"),
-          (1, -1, {'form': 'suffix', 'sharp': True, 'suf': 'm'}))
-    check("parse (c) bare", parse_object("(c)"),
-          (0, -1, {'form': 'paren_bare', 'sharp': True}))
-
-    # --- Neo-Riemannian identities (algebra sanity) ---
-    # On a major triad, PLP = H (hexatonic pole); LR cycle etc.
-    check_eval("C P  = c",        "C(P)",   "(C,-)")
-    check_eval("C L  = e",        "C(L)",   "(E,-)")
-    check_eval("C R  = a",        "C(R)",   "(A,-)")
-    check_eval("C LR = e->G?",    "C(LR)",  "(G,+)")   # L: e, R: G major
-    check_eval("Gm LRL",          "(Gm)(LRL)", "(G♯,+)")
-
-    # H equals PLP directly:
-    check("PLP == H (UTT)", group_to_utt("PLP"), UTT_TABLE['H'])
-    check("N == PLR (UTT)", group_to_utt("PLR"), UTT_TABLE['N'])
-    check("S == LPR (UTT)", group_to_utt("LPR"), UTT_TABLE['S'])
-
-    # --- Involutions: P, L, R are their own inverse ---
-    for g in ('P', 'L', 'R'):
-        check(f"{g}{g} = identity", group_to_utt(g + g), IDENTITY_UTT)
-
-    # --- UTT literal application ---
-    check_eval("<+,2,10>(C,+) = D+", "<+,2,10>(C,+)", "(D,+)")
-
-    # --- Dominant D6 = tritone ---
-    check("D6 UTT", token_to_utt("D6"), (1, 6, 6))
-    check_eval("C D6 = F♯", "C(D6)", "(F♯,+)")
-
-    # --- Path finding ---
-    # C+ to C- : shortest P/L/R is just P.
-    p = _all_shortest((0, 1), (0, -1), PATH_PRESETS['plr'])
-    check("path C+ -> C- length", min(len(x) for x in p), 1)
-
-    # hyer preset includes D6.
-    check("hyer preset", PATH_PRESETS['hyer'], ('D6', 'L', 'R', 'P'))
-    # C+ to F#+ via D6 in one step.
-    p2 = _all_shortest((0, 1), (6, 1), PATH_PRESETS['hyer'])
-    check("path C+ -> F♯+ (hyer) len", min(len(x) for x in p2), 1)
-
-    # lr preset: C+ -> C- is unreachable (mode flip needs odd count, but
-    # L/R alone can reach it via LR...? verify it is reachable or not).
-    p3 = _all_shortest((0, 1), (0, -1), PATH_PRESETS['lr'])
-    check("lr C+ -> C- reachable?", bool(p3), True)  # L reaches (E,-)... P needed?
-    # C+ -> D+ under lr only (may be unreachable): just assert it returns a list.
-    check("lr returns list", isinstance(
-        _all_shortest((0, 1), (2, 1), PATH_PRESETS['lr']), list), True)
-
-    # --- resolve_path_ops ---
-    check("resolve plr",  resolve_path_ops("plr"),  ('P', 'L', 'R'))
-    check("resolve hyer", resolve_path_ops("hyer"), ('D6', 'L', 'R', 'P'))
-    check("resolve PLR",  resolve_path_ops("PLR"),  ('P', 'L', 'R'))
-    check("resolve 'P L D6'", resolve_path_ops("P L D6"), ('P', 'L', 'D6'))
-    check_error("resolve invalid token", lambda: resolve_path_ops("XYZ"))
-
-    # --- pretty token / superscript ---
-    check("pretty D6",  _pretty_token("D6"),  "D\u2076")   # D⁶
-    check("pretty D-1", _pretty_token("D-1"), "D\u207B\u00b9")
-    check("pretty P",   _pretty_token("P"),   "P")
-
-    # --- compress_word ---
-    check("compress LRLR", compress_word("LRLR"), "(LR)\u00b2")
-    check("compress PP",   compress_word("PP"),   "P\u00b2")
-
-    # --- inspect / describe_utt smoke test ---
-    d = describe_utt(UTT_TABLE['P'])
-    check("inspect P riemannian", "Riemannian" in d, True)
-
-    # --- Error paths ---
-    check_error("no object",      lambda: evaluate("(LR)(PP)"))
-    check_error("bad operator",   lambda: group_to_utt("Z"))
-
-    # --- format_steps (--steps): keep user sequence, expand compounds ---
-    OUTPUT_STYLE = 'tuple'
-    s = format_steps("C(LR)")
-    check("steps C(LR) count",  "2 steps" in s, True)
-    check("steps C(LR) L step", "→ (E,-)" in s, True)
-    check("steps C(LR) final",  s.strip().endswith("(G,+)"), True)
-
-    check("iter H -> PLP",  list(_iter_side_tokens("H")),  ['P', 'L', 'P'])
-    check("iter N -> PLR",  list(_iter_side_tokens("N")),  ['P', 'L', 'R'])
-    check("iter S -> LPR",  list(_iter_side_tokens("S")),  ['L', 'P', 'R'])
-    check("iter P' -> RPL", list(_iter_side_tokens("P'")), ['R', 'P', 'L'])
-    check("steps H is 3",   "3 steps" in format_steps("C(H)"), True)
-
-    # Sequence must NOT collapse: LRLRLR stays 6 steps (not shortest T-form).
-    check("steps no collapse", "6 steps" in format_steps("C(LRLRLR)"), True)
-
-    # Expansion faithful: same final triad as evaluate().
-    for expr in ("C(H)", "(Eb,-)N", "G-(S)", "C(P')", "C(LRLRLR)"):
-        want, _ = evaluate(expr)
-        got = format_steps(expr).strip().split('=')[-1].strip()
-        check(f"steps faithful {expr}", got, want)
-
-    # Prefix-then-suffix order.
-    check("iter order LR + P",
-          list(_iter_side_tokens("LR")) + list(_iter_side_tokens("P")),
-          ['L', 'R', 'P'])
-
-    print(f"\n{passed} passed, {failed} failed.")
-    return failed == 0
 
 
 if __name__ == '__main__':

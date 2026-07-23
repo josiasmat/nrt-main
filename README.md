@@ -4,7 +4,21 @@ A python script that reads and evaluates neo-riemannian expressions.
 
 ## Run
 
-Download the `nrt.py` file and run with `python nrt.py`.
+Download the `nrt.pyz` file and run with `python nrt.pyz`.
+
+## Library API (`NRT` class)
+
+The project now includes an `NRT` class in `transforms.py` for programmatic use.
+
+```python
+from transforms import NRT
+from triad import Triad
+
+nrt = NRT(mode='lr', output_style='tuple', spelling='input')
+result = nrt.apply(Triad.from_string("C"), "LR")   # Triad object
+text = nrt.format_triad(result, style='tuple')     # "(G,+)"
+info = nrt.inspect("PLR")                          # UTT summary text
+```
 
 # How to use
 
@@ -82,16 +96,18 @@ All examples denote the same C major/minor triads.
 
 ## Step-by-step output
 
-    <expr> --steps
+    <expr> --follow
     
 Decompose the expression, showing each operator applied one at a time 
 (like `path:`). The user's sequence is kept; compounds (H, N, S, P', L', R') 
-expand to P/L/R generators.
+expand to P/L/R atomics.
 
 **Examples:**
 
-    C (LR) --steps
-    (Gm)(H) --steps
+    C (LR) --follow
+    (Gm)(H) --follow
+    follow: C (LR)
+    follow (Gm)(H)
 
 
 ## Inspection
@@ -114,9 +130,9 @@ its type, whether it is Riemannian, and its order. Respects the current
 
 Compute the shortest path between two triads `O1` and `O2`.
 
-`SET` selects the generators:
+`SET` selects the atomics:
 
-| SET | Generators |
+| SET | Atomic transformations |
 |-----|------------|
 | `plr` | P/L/R group (default) |
 | `hyer` | adds Dominant D6 (P/L/R/D6) |
